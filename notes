@@ -1,0 +1,110 @@
+four functions  getcontext(), setcontext(), makecontext(3), and swapcontext(3) that
+       allow user-level context switching between multiple threads of
+       control within a process.
+
+typedef struct ucontext_t {
+               struct ucontext_t *uc_link;
+               sigset_t          uc_sigmask;
+               stack_t           uc_stack;
+               mcontext_t        uc_mcontext;
+               ...
+           } ucontext_t;
+		   
+	   
+1. int getcontext(ucontext_t *ucp);
+          
+		   
+The function getcontext() initializes the structure pointed at by ucp
+       to the currently active context.
+	   
+	   
+	   
+2. void makecontext(ucontext_t *ucp, void (*func)(), int argc, ...);
+
+The makecontext() function modifies the context pointed to by ucp
+       (which was obtained from a call to getcontext(3)).  Before invoking
+       makecontext(), the caller must allocate a new stack for this context
+       and assign its address to ucp->uc_stack, and define a successor
+       context and assign its address to ucp->uc_link.
+	   
+When this context is later activated (using setcontext(3) or
+       swapcontext()) the function func is called, and passed the series of
+       integer (int) arguments that follow argc; the caller must specify the
+       number of these arguments in argc.  When this function returns, the
+       successor context is activated.
+	   
+Ex :
+MyThread MyThreadCreate(void(*start_funct)(void *), void *args)
+{
+	MyThread t_new = (MyThread)malloc(sizeof(ucontext_t));
+        
+	char *thread_stack = malloc(8*1024);
+	struct t_node *node,*cur_node;
+	int ret = getcontext(t_new);
+
+	t_new->uc_stack.ss_sp = thread_stack;
+	t_new->uc_stack.ss_size = 8192;
+	t_new->uc_stack.ss_flags = 0;
+	t_new->uc_link = NULL; //killer_thread;
+
+	cur_node = peek();
+        
+    if(cur_node!=NULL){
+        cur_node->num_child++;
+        
+    }
+    getcontext(t_new);
+	makecontext(t_new,start_funct,1,args);
+	node = getNode(t_new,0,exe_node); 
+	enqueue(readyQueue, node);
+	return t_new;
+}
+
+
+================ Implementation ==============
+We have two queues:
+1. ReadyQueue : any thread which is ready to be scheduled is put in readly queue. exe_node is the node which is being executed currently.
+2. BlockedQueue : Blocked threads are put into this queue.
+
+1. MyThread MyThreadCreate (void(*start_funct)(void *), void *args) This routine creates a new MyThread. 
+The parameter start_func is the function in which the new thread starts executing. The parameter args is passed to the start function. 
+This routine does not pre‐empt the invoking thread. In others words the parent (invoking) thread will continue to run; the child thread will sit in the ready queue.
+
+=> This basically create a ucontext and called makecontext() which attaches this context to ucontext.
+
+2. void MyThreadYield(void) Suspends execution of invoking thread and yield to another thread. The invoking thread remains ready to execute—it is not blocked. 
+   Thus, if there is no other ready thread, the invoking thread will continue to execute.
+   
+=> This picks up the node in front of readyQueue and swapcontext() with exe_node. Thus, exe_node has yielded to other thread
+
+3. int MyThreadJoin(MyThread th) Joins the invoking function with the specified child thread. If the child has already terminated, do not block. 
+   Note: A child may have terminated without the parent having joined with it. Returns 0 on success (after any necessary blocking). It returns ‐1 on failure. 
+   Failure occurs if specified thread is not an immediate child of invoking thread.
+
+=> This is called by a parent thread and child thread (th) is passed as pointer. We check child thread (th) exists in ReadyQueue or BlockedQueue. It might be possible that
+    child has exited. If child (th) is found and exe_node is parent of th, then parent node exe_node is put at end of BlockedQueue. It means, child node, th will be 
+	executed first and it has blocked a parent node.
+
+4. void MyThreadJoinAll(void) Waits until all children have terminated. Returns immediately if there are no active children.
+    It checks if exe_node has any child node waiting in readyQueue or BlockedQueue. If yes, exe_node is added at end of BlockedQueue.
+	
+	
+#Semaphore routines.
+
+1. MySemaphore MySemaphoreInit(int initialValue) Create a semaphore. Set the initial value to initialValue, which must be non‐ negative. 
+A positive initial value has the same effect as invoking MySemaphoreSignal the same number of times. On error it returns NULL.
+
+=> A samaphore is a struct
+struct sema{
+   int val;
+   struct Queue * semaQueue;
+}; 
+It has a value and pointer to a queue of threads waiting for the Semaphore.
+
+2. void MySemaphoreSignal(MySemaphore sem) Signal semaphore sem : It increments sem-> val. Picks a thread from it's semaQueue and puts it in readyQueue.
+
+3. MySemaphoreWait(MySemaphore sem) : adds exe_node to semaQueue.
+
+
+NOTE : in all places where exe_node is being pushed to tail of readyQueue or BlockedQueue, another thread must be pulled out of readyQueue and swapcontext being called for it.
+	
